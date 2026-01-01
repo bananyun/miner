@@ -1,1 +1,495 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Копатель онлайн</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #202020;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      color: #f1f1f1;
+    }
+    #overlay {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: rgba(0, 0, 0, 0.45);
+      padding: 10px 12px;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      backdrop-filter: blur(2px);
+    }
+    #buttons {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #2b7a2b;
+      border: none;
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+    button:hover { background: #359735; }
+    button:active { transform: translateY(1px); }
+    #hotbar {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .slot {
+      width: 38px;
+      height: 38px;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      border: 2px solid #777;
+      color: #111;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.1s, border-color 0.1s;
+    }
+    .slot.active {
+      border-color: #fff;
+      transform: translateY(-2px);
+      box-shadow: 0 0 8px rgba(255,255,255,0.6);
+    }
+    #crosshair {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 18px;
+      height: 18px;
+      margin-left: -9px;
+      margin-top: -9px;
+      pointer-events: none;
+      z-index: 5;
+    }
+    #crosshair:before, #crosshair:after {
+      content: '';
+      position: absolute;
+      background: #fff;
+    }
+    #crosshair:before {
+      left: 8px;
+      top: 0;
+      width: 2px;
+      height: 18px;
+    }
+    #crosshair:after {
+      left: 0;
+      top: 8px;
+      width: 18px;
+      height: 2px;
+    }
+    #hint {
+      font-size: 13px;
+      color: #dcdcdc;
+      line-height: 1.5;
+    }
+    #log {
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      background: rgba(0,0,0,0.5);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      max-width: 260px;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div id="buttons">
+      <button id="save">Save</button>
+      <button id="load">Load</button>
+    </div>
+    <div id="hotbar"></div>
+    <div id="hint">
+      ЛКМ — сломать, ПКМ — поставить блок.<br>
+      Клик по экрану включает захват мыши.
+    </div>
+  </div>
+  <div id="crosshair"></div>
+  <div id="log">Готово</div>
+  <canvas id="c"></canvas>
 
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js';
+
+    const canvas = document.getElementById('c');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x7ec0ee);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+    camera.rotation.order = 'YXZ';
+    const ambient = new THREE.HemisphereLight(0xffffff, 0x556677, 0.7);
+    const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+    sun.position.set(30, 60, 20);
+    sun.castShadow = false;
+    scene.add(ambient, sun);
+
+    const WORLD_SIZE = 32;
+    const WORLD_HEIGHT = 18;
+    const world = new Map();
+    const meshes = new Map();
+
+    const blockTypes = [
+      { name: 'Grass', color: 0x7acb4d },
+      { name: 'Dirt', color: 0x8b5a2b },
+      { name: 'Stone', color: 0x9fa3a6 },
+      { name: 'Wood', color: 0xc18f5a },
+      { name: 'Sand', color: 0xe9ddad },
+    ];
+    const materials = blockTypes.map(t => new THREE.MeshStandardMaterial({ color: t.color, flatShading: true }));
+    let currentBlock = 0;
+
+    const hotbar = document.getElementById('hotbar');
+    blockTypes.forEach((t, i) => {
+      const slot = document.createElement('div');
+      slot.className = 'slot' + (i === currentBlock ? ' active' : '');
+      slot.textContent = i + 1;
+      slot.style.background = '#' + t.color.toString(16).padStart(6, '0');
+      slot.title = `${i + 1}: ${t.name}`;
+      slot.onclick = () => setBlockType(i);
+      hotbar.appendChild(slot);
+    });
+    function updateHotbar() {
+      [...hotbar.children].forEach((el, idx) => {
+        el.classList.toggle('active', idx === currentBlock);
+      });
+    }
+    function setBlockType(idx) {
+      currentBlock = idx;
+      updateHotbar();
+    }
+
+    const logEl = document.getElementById('log');
+    const log = (msg) => logEl.textContent = msg;
+
+    function keyFor(x, y, z) { return `${x},${y},${z}`; }
+    function getBlock(x, y, z) { return world.get(keyFor(x, y, z)) ?? 0; }
+    function isSolid(x, y, z) { return world.has(keyFor(x, y, z)); }
+
+    const faceDefs = [
+      { dir: [1, 0, 0],  corners: [[0.5, -0.5, -0.5],[0.5, 0.5, -0.5],[0.5, 0.5, 0.5],[0.5, -0.5, 0.5]] },
+      { dir: [-1, 0, 0], corners: [[-0.5, -0.5, 0.5],[-0.5, 0.5, 0.5],[-0.5, 0.5, -0.5],[-0.5, -0.5, -0.5]] },
+      { dir: [0, 1, 0],  corners: [[-0.5, 0.5, 0.5],[0.5, 0.5, 0.5],[0.5, 0.5, -0.5],[-0.5, 0.5, -0.5]] },
+      { dir: [0, -1, 0], corners: [[-0.5, -0.5, -0.5],[0.5, -0.5, -0.5],[0.5, -0.5, 0.5],[-0.5, -0.5, 0.5]] },
+      { dir: [0, 0, 1],  corners: [[0.5, -0.5, 0.5],[0.5, 0.5, 0.5],[-0.5, 0.5, 0.5],[-0.5, -0.5, 0.5]] },
+      { dir: [0, 0, -1], corners: [[-0.5, -0.5, -0.5],[-0.5, 0.5, -0.5],[0.5, 0.5, -0.5],[0.5, -0.5, -0.5]] },
+    ];
+
+    function buildGeometryForBlock(x, y, z) {
+      const positions = [];
+      const normals = [];
+      const indices = [];
+      let faceCount = 0;
+      faceDefs.forEach(({ dir, corners }) => {
+        const nx = x + dir[0];
+        const ny = y + dir[1];
+        const nz = z + dir[2];
+        if (isSolid(nx, ny, nz)) return;
+        const baseIndex = positions.length / 3;
+        corners.forEach(c => positions.push(c[0] + x, c[1] + y, c[2] + z));
+        for (let i = 0; i < 4; i++) normals.push(...dir);
+        indices.push(baseIndex, baseIndex + 1, baseIndex + 2, baseIndex, baseIndex + 2, baseIndex + 3);
+        faceCount++;
+      });
+      if (!positions.length) return null;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geo.setIndex(indices);
+      geo.computeBoundingSphere();
+      return geo;
+    }
+
+    function removeBlockMesh(x, y, z) {
+      const k = keyFor(x, y, z);
+      const mesh = meshes.get(k);
+      if (mesh) {
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+        meshes.delete(k);
+      }
+    }
+
+    function updateBlockMesh(x, y, z) {
+      removeBlockMesh(x, y, z);
+      if (!isSolid(x, y, z)) return;
+      const geo = buildGeometryForBlock(x, y, z);
+      if (!geo) return;
+      const type = getBlock(x, y, z);
+      const mesh = new THREE.Mesh(geo, materials[type]);
+      mesh.userData.block = { x, y, z };
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      scene.add(mesh);
+      meshes.set(keyFor(x, y, z), mesh);
+    }
+
+    function refreshNeighbors(x, y, z) {
+      for (const [dx, dy, dz] of [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) {
+        updateBlockMesh(x + dx, y + dy, z + dz);
+      }
+    }
+
+    function addBlock(x, y, z, type = currentBlock) {
+      if (y < 0 || y >= WORLD_HEIGHT) return;
+      const k = keyFor(x, y, z);
+      if (world.has(k)) return;
+      world.set(k, type);
+      updateBlockMesh(x, y, z);
+      refreshNeighbors(x, y, z);
+    }
+
+    function removeBlock(x, y, z) {
+      const k = keyFor(x, y, z);
+      if (!world.has(k)) return;
+      world.delete(k);
+      removeBlockMesh(x, y, z);
+      refreshNeighbors(x, y, z);
+    }
+
+    function heightNoise(x, z) {
+      const nx = x / WORLD_SIZE;
+      const nz = z / WORLD_SIZE;
+      const base = Math.sin(nx * 6.28) * 0.6 + Math.cos(nz * 6.28) * 0.6;
+      const ripple = Math.sin((nx + nz) * 12.6) * 0.4;
+      return base + ripple;
+    }
+
+    function generateWorld() {
+      const half = Math.floor(WORLD_SIZE / 2);
+      for (let x = -half; x <= half; x++) {
+        for (let z = -half; z <= half; z++) {
+          const h = Math.floor(6 + heightNoise(x, z) * 3);
+          for (let y = 0; y < h; y++) {
+            const type = y === h - 1 ? 0 : (y > h - 4 ? 1 : 2);
+            addBlock(x, y, z, type);
+          }
+          if (Math.random() < 0.04) {
+            const treeH = 3 + Math.floor(Math.random() * 3);
+            for (let t = 0; t < treeH; t++) addBlock(x, h + t, z, 3);
+            addBlock(x, h + treeH, z, 0);
+          }
+        }
+      }
+    }
+
+    const player = {
+      position: new THREE.Vector3(0, 18, 0),
+      velocity: new THREE.Vector3(),
+      yaw: 0,
+      pitch: 0,
+      onGround: false,
+    };
+    const speed = { walk: 6, run: 10, jump: 8, gravity: 16, friction: 8 };
+    const bounds = { xz: 0.35, y: 0.9 };
+    const keys = {};
+
+    const pointerLockElement = renderer.domElement;
+    pointerLockElement.addEventListener('click', () => {
+      pointerLockElement.requestPointerLock();
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+      if (document.pointerLockElement === pointerLockElement) {
+        log('Управление активировано. WASD/Space/Shift + мышь.');
+      } else {
+        log('Кликните по экрану для захвата мыши.');
+      }
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (document.pointerLockElement !== pointerLockElement) return;
+      const sensitivity = 0.0025;
+      player.yaw -= e.movementX * sensitivity;
+      player.pitch -= e.movementY * sensitivity;
+      player.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.pitch));
+    });
+
+    document.addEventListener('keydown', (e) => {
+      keys[e.code] = true;
+      if (/Digit[1-5]/.test(e.code)) {
+        setBlockType(Number(e.code.slice(-1)) - 1);
+      }
+    });
+    document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.far = 6;
+    const mouse = new THREE.Vector2(0, 0);
+
+    window.addEventListener('mousedown', (e) => {
+      if (document.pointerLockElement !== pointerLockElement) return;
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObjects([...meshes.values()], false);
+      if (!hits.length) return;
+      const hit = hits[0];
+      const { x, y, z } = hit.object.userData.block;
+      if (e.button === 0) {
+        removeBlock(x, y, z);
+      } else if (e.button === 2) {
+        const n = hit.face?.normal ?? new THREE.Vector3();
+        const nx = x + n.x;
+        const ny = y + n.y;
+        const nz = z + n.z;
+        addBlock(nx, ny, nz, currentBlock);
+      }
+    });
+    window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    function physics(dt) {
+      const forward = new THREE.Vector3();
+      const right = new THREE.Vector3();
+      camera.getWorldDirection(forward);
+      forward.y = 0;
+      forward.normalize();
+      right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+      const accel = new THREE.Vector3();
+      const run = keys['ShiftLeft'] || keys['ShiftRight'];
+      const currentSpeed = run ? speed.run : speed.walk;
+      if (keys['KeyW']) accel.add(forward);
+      if (keys['KeyS']) accel.sub(forward);
+      if (keys['KeyA']) accel.sub(right);
+      if (keys['KeyD']) accel.add(right);
+      accel.normalize().multiplyScalar(currentSpeed);
+      player.velocity.x += accel.x * dt;
+      player.velocity.z += accel.z * dt;
+
+      player.velocity.y -= speed.gravity * dt;
+      if (player.onGround && keys['Space']) {
+        player.velocity.y = speed.jump;
+        player.onGround = false;
+      }
+
+      applyFriction(dt);
+      moveWithCollisions(dt);
+    }
+
+    function applyFriction(dt) {
+      const friction = Math.max(0, 1 - speed.friction * dt);
+      player.velocity.x *= friction;
+      player.velocity.z *= friction;
+    }
+
+    function moveAxis(axis, amount) {
+      const pos = player.position;
+      pos[axis] += amount;
+      const min = new THREE.Vector3(pos.x - bounds.xz, pos.y - bounds.y, pos.z - bounds.xz);
+      const max = new THREE.Vector3(pos.x + bounds.xz, pos.y + bounds.y, pos.z + bounds.xz);
+      const startX = Math.floor(min.x);
+      const endX = Math.floor(max.x);
+      const startY = Math.floor(min.y);
+      const endY = Math.floor(max.y);
+      const startZ = Math.floor(min.z);
+      const endZ = Math.floor(max.z);
+      for (let x = startX; x <= endX; x++) {
+        for (let y = startY; y <= endY; y++) {
+          for (let z = startZ; z <= endZ; z++) {
+            if (!isSolid(x, y, z)) continue;
+            const bxMin = x - 0.5, bxMax = x + 0.5;
+            const byMin = y - 0.5, byMax = y + 0.5;
+            const bzMin = z - 0.5, bzMax = z + 0.5;
+            if (max.x <= bxMin || min.x >= bxMax || max.y <= byMin || min.y >= byMax || max.z <= bzMin || min.z >= bzMax) continue;
+            if (amount > 0) pos[axis] = axis === 'y' ? byMin - bounds.y - 0.001 : (axis === 'x' ? bxMin - bounds.xz - 0.001 : bzMin - bounds.xz - 0.001);
+            else pos[axis] = axis === 'y' ? byMax + bounds.y + 0.001 : (axis === 'x' ? bxMax + bounds.xz + 0.001 : bzMax + bounds.xz + 0.001);
+            player.velocity[axis] = 0;
+            if (axis === 'y' && amount < 0) player.onGround = true;
+            return;
+          }
+        }
+      }
+    }
+
+    function moveWithCollisions(dt) {
+      player.onGround = false;
+      moveAxis('y', player.velocity.y * dt);
+      moveAxis('x', player.velocity.x * dt);
+      moveAxis('z', player.velocity.z * dt);
+    }
+
+    function resizeRenderer() {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', resizeRenderer);
+    resizeRenderer();
+
+    function saveWorld() {
+      const data = [...world.entries()];
+      localStorage.setItem('voxelWorld', JSON.stringify(data));
+      log('Мир сохранён в localStorage.');
+    }
+    function loadWorld() {
+      const data = localStorage.getItem('voxelWorld');
+      if (!data) { log('Нет сохранений.'); return; }
+      clearWorld();
+      const parsed = JSON.parse(data);
+      parsed.forEach(([k, v]) => {
+        const [x, y, z] = k.split(',').map(Number);
+        world.set(k, v);
+        updateBlockMesh(x, y, z);
+      });
+      world.forEach((_, key) => {
+        const [x, y, z] = key.split(',').map(Number);
+        refreshNeighbors(x, y, z);
+      });
+      player.position.set(0, 18, 0);
+      player.velocity.set(0, 0, 0);
+      log('Мир загружен.');
+    }
+    function clearWorld() {
+      meshes.forEach(mesh => {
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+      });
+      meshes.clear();
+      world.clear();
+    }
+
+    document.getElementById('save').onclick = saveWorld;
+    document.getElementById('load').onclick = loadWorld;
+
+    const clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = Math.min(0.05, clock.getDelta() || 1 / 60);
+      physics(dt);
+      camera.position.copy(player.position);
+      camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+      renderer.render(scene, camera);
+    }
+
+    function init() {
+      generateWorld();
+      animate();
+      log('Готово. Нажмите на экран для захвата.');
+    }
+    init();
+  </script>
+</body>
+</html>
