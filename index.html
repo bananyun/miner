@@ -52,8 +52,8 @@
       align-items: center;
     }
     .slot {
-      width: 42px;
-      height: 42px;
+      width: 38px;
+      height: 38px;
       border-radius: 6px;
       display: grid;
       place-items: center;
@@ -62,29 +62,11 @@
       font-weight: 700;
       cursor: pointer;
       transition: transform 0.1s, border-color 0.1s;
-      position: relative;
-      background: #303030;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
     }
     .slot.active {
       border-color: #fff;
       transform: translateY(-2px);
       box-shadow: 0 0 8px rgba(255,255,255,0.6);
-    }
-    .slot .num {
-      position: absolute;
-      top: -8px;
-      left: 4px;
-      font-size: 11px;
-      color: #cfcfcf;
-    }
-    .slot .count {
-      position: absolute;
-      right: 4px;
-      bottom: -6px;
-      font-size: 12px;
-      color: #fff;
-      text-shadow: 0 0 4px rgba(0,0,0,0.8);
     }
     #crosshair {
       position: absolute;
@@ -129,27 +111,6 @@
       font-size: 12px;
       max-width: 260px;
     }
-    #progress {
-      position: absolute;
-      left: 50%;
-      top: 52%;
-      width: 120px;
-      height: 10px;
-      margin-left: -60px;
-      border: 1px solid rgba(255,255,255,0.5);
-      border-radius: 6px;
-      overflow: hidden;
-      background: rgba(0,0,0,0.4);
-      box-shadow: 0 0 8px rgba(0,0,0,0.6);
-      display: none;
-      z-index: 6;
-    }
-    #progress .bar {
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, #58d957, #2ea72d);
-      transition: width 0.05s;
-    }
   </style>
 </head>
 <body>
@@ -165,7 +126,6 @@
     </div>
   </div>
   <div id="crosshair"></div>
-  <div id="progress"><div class="bar"></div></div>
   <div id="log">Готово</div>
   <canvas id="c"></canvas>
 
@@ -186,11 +146,10 @@
     sun.castShadow = false;
     scene.add(ambient, sun);
 
-    const WORLD_SIZE = 64;
-    const WORLD_HEIGHT = 48;
+    const WORLD_SIZE = 32;
+    const WORLD_HEIGHT = 18;
     const world = new Map();
     const meshes = new Map();
-    const drops = [];
 
     const blockTypes = [
       { name: 'Grass', color: 0x7acb4d },
@@ -198,118 +157,35 @@
       { name: 'Stone', color: 0x9fa3a6 },
       { name: 'Wood', color: 0xc18f5a },
       { name: 'Sand', color: 0xe9ddad },
-      { name: 'Ore', color: 0x8bc5ff },
     ];
     const materials = blockTypes.map(t => new THREE.MeshStandardMaterial({ color: t.color, flatShading: true }));
-
-    const HOTBAR_SLOTS = 9;
-    const inventory = Array.from({ length: HOTBAR_SLOTS }, () => ({ type: null, count: 0 }));
-    let selectedSlot = 0;
-
-    function seedInventory() {
-      const starter = [0, 1, 2, 3, 4];
-      starter.forEach((type, idx) => {
-        inventory[idx].type = type;
-        inventory[idx].count = 16;
-      });
-    }
-    seedInventory();
+    let currentBlock = 0;
 
     const hotbar = document.getElementById('hotbar');
-    for (let i = 0; i < HOTBAR_SLOTS; i++) {
+    blockTypes.forEach((t, i) => {
       const slot = document.createElement('div');
-      slot.className = 'slot' + (i === selectedSlot ? ' active' : '');
-      slot.dataset.slot = i;
-      const num = document.createElement('div');
-      num.className = 'num';
-      num.textContent = i + 1;
-      const count = document.createElement('div');
-      count.className = 'count';
-      slot.append(num, count);
-      slot.onclick = () => setSelectedSlot(i);
+      slot.className = 'slot' + (i === currentBlock ? ' active' : '');
+      slot.textContent = i + 1;
+      slot.style.background = '#' + t.color.toString(16).padStart(6, '0');
+      slot.title = `${i + 1}: ${t.name}`;
+      slot.onclick = () => setBlockType(i);
       hotbar.appendChild(slot);
-    }
-
-    function renderHotbar() {
+    });
+    function updateHotbar() {
       [...hotbar.children].forEach((el, idx) => {
-        const slot = inventory[idx];
-        el.classList.toggle('active', idx === selectedSlot);
-        if (slot.type !== null && slot.count > 0) {
-          el.style.background = '#' + blockTypes[slot.type].color.toString(16).padStart(6, '0');
-          el.title = `${idx + 1}: ${blockTypes[slot.type].name}`;
-          el.querySelector('.count').textContent = slot.count;
-        } else {
-          el.style.background = '#303030';
-          el.title = `${idx + 1}: Пусто`;
-          el.querySelector('.count').textContent = '';
-          slot.type = null;
-          slot.count = 0;
-        }
+        el.classList.toggle('active', idx === currentBlock);
       });
     }
-
-    function setSelectedSlot(idx) {
-      selectedSlot = idx;
-      renderHotbar();
-    }
-    renderHotbar();
-
-    const dropGeometry = new THREE.BoxGeometry(0.35, 0.35, 0.35);
-    function findSlotWithType(type) {
-      return inventory.findIndex(s => s.type === type && s.count > 0);
-    }
-    function findEmptySlot() {
-      return inventory.findIndex(s => s.type === null || s.count === 0);
-    }
-    function addToInventory(type, count = 1) {
-      let idx = findSlotWithType(type);
-      if (idx === -1) idx = findEmptySlot();
-      if (idx === -1) return false;
-      const slot = inventory[idx];
-      slot.type = type;
-      slot.count = (slot.count || 0) + count;
-      renderHotbar();
-      return true;
-    }
-    function selectedBlockType() {
-      const slot = inventory[selectedSlot];
-      if (!slot || slot.count <= 0 || slot.type === null) return null;
-      return slot.type;
-    }
-    function consumeSelectedBlock() {
-      const slot = inventory[selectedSlot];
-      if (!slot || slot.count <= 0) return false;
-      slot.count -= 1;
-      if (slot.count <= 0) {
-        slot.count = 0;
-        slot.type = null;
-      }
-      renderHotbar();
-      return true;
-    }
-
-    function serializeInventory() {
-      return inventory.map(s => ({ type: s.type, count: s.count }));
-    }
-    function deserializeInventory(data) {
-      inventory.forEach((slot, idx) => {
-        const source = data?.[idx];
-        slot.type = source?.type ?? null;
-        slot.count = source?.count ?? 0;
-      });
-      renderHotbar();
+    function setBlockType(idx) {
+      currentBlock = idx;
+      updateHotbar();
     }
 
     const logEl = document.getElementById('log');
     const log = (msg) => logEl.textContent = msg;
-    const progressEl = document.getElementById('progress');
-    const progressBar = progressEl.querySelector('.bar');
-    let mouseLeftDown = false;
-    let currentHit = null;
-    const mining = { target: null, progress: 0, required: 0, type: null };
 
     function keyFor(x, y, z) { return `${x},${y},${z}`; }
-    function getBlock(x, y, z) { return world.get(keyFor(x, y, z)); }
+    function getBlock(x, y, z) { return world.get(keyFor(x, y, z)) ?? 0; }
     function isSolid(x, y, z) { return world.has(keyFor(x, y, z)); }
 
     const faceDefs = [
@@ -376,102 +252,58 @@
       }
     }
 
-    function addBlock(x, y, z, type) {
-      if (y < 0 || y >= WORLD_HEIGHT) return false;
+    function addBlock(x, y, z, type = currentBlock) {
+      if (y < 0 || y >= WORLD_HEIGHT) return;
       const k = keyFor(x, y, z);
-      if (world.has(k)) return false;
+      if (world.has(k)) return;
       world.set(k, type);
       updateBlockMesh(x, y, z);
       refreshNeighbors(x, y, z);
-      return true;
     }
 
     function removeBlock(x, y, z) {
       const k = keyFor(x, y, z);
-      if (!world.has(k)) return null;
-      const type = world.get(k);
+      if (!world.has(k)) return;
       world.delete(k);
       removeBlockMesh(x, y, z);
       refreshNeighbors(x, y, z);
-      return type;
     }
 
-    function spawnDrop(type, position) {
-      const mesh = new THREE.Mesh(dropGeometry, materials[type]);
-      mesh.position.copy(position).add(new THREE.Vector3(0, 0.3, 0));
-      scene.add(mesh);
-      drops.push({
-        mesh,
-        type,
-        velocity: new THREE.Vector3((Math.random() - 0.5) * 1.4, Math.random() * 2 + 1, (Math.random() - 0.5) * 1.4),
-      });
-    }
-
-    function hash2(x, z) {
-      const s = Math.sin(x * 374761393 + z * 668265263) * 43758.5453;
-      return s - Math.floor(s);
-    }
-    function fade(t) { return t * t * (3 - 2 * t); }
-    function valueNoise(x, z) {
-      const xi = Math.floor(x);
-      const zi = Math.floor(z);
-      const xf = x - xi;
-      const zf = z - zi;
-      const v00 = hash2(xi, zi);
-      const v10 = hash2(xi + 1, zi);
-      const v01 = hash2(xi, zi + 1);
-      const v11 = hash2(xi + 1, zi + 1);
-      const fx = fade(xf);
-      const fz = fade(zf);
-      const i1 = THREE.MathUtils.lerp(v00, v10, fx);
-      const i2 = THREE.MathUtils.lerp(v01, v11, fx);
-      return THREE.MathUtils.lerp(i1, i2, fz) * 2 - 1;
-    }
-    function fbm(x, z) {
-      let total = 0;
-      let amp = 0.7;
-      let freq = 0.05;
-      for (let i = 0; i < 4; i++) {
-        total += amp * valueNoise(x * freq, z * freq);
-        freq *= 2;
-        amp *= 0.5;
-      }
-      return total;
+    function heightNoise(x, z) {
+      const nx = x / WORLD_SIZE;
+      const nz = z / WORLD_SIZE;
+      const base = Math.sin(nx * 6.28) * 0.6 + Math.cos(nz * 6.28) * 0.6;
+      const ripple = Math.sin((nx + nz) * 12.6) * 0.4;
+      return base + ripple;
     }
 
     function generateWorld() {
       const half = Math.floor(WORLD_SIZE / 2);
       for (let x = -half; x <= half; x++) {
         for (let z = -half; z <= half; z++) {
-          const height = Math.floor(12 + fbm(x, z) * 8);
-          const dirtDepth = 2 + Math.floor((hash2(x, z) * 100) % 3); // 2-4 слоёв
-          for (let y = 0; y <= height; y++) {
-            let type = 2; // stone
-            if (y === height) type = 0; // grass
-            else if (y >= height - dirtDepth) type = 1; // dirt
-            else if (hash2(x * 3 + y * 11, z * 5) > 0.97) type = 5; // ore
+          const h = Math.floor(6 + heightNoise(x, z) * 3);
+          for (let y = 0; y < h; y++) {
+            const type = y === h - 1 ? 0 : (y > h - 4 ? 1 : 2);
             addBlock(x, y, z, type);
           }
-          if (hash2(x * 13, z * 17) > 0.985) {
-            const trunk = 3 + Math.floor(hash2(x * 19, z * 23) * 3);
-            const base = height + 1;
-            for (let t = 0; t < trunk; t++) addBlock(x, base + t, z, 3);
-            addBlock(x, base + trunk, z, 0);
+          if (Math.random() < 0.04) {
+            const treeH = 3 + Math.floor(Math.random() * 3);
+            for (let t = 0; t < treeH; t++) addBlock(x, h + t, z, 3);
+            addBlock(x, h + treeH, z, 0);
           }
         }
       }
     }
 
     const player = {
-      position: new THREE.Vector3(0, 24, 0),
+      position: new THREE.Vector3(0, 18, 0),
       velocity: new THREE.Vector3(),
       yaw: 0,
       pitch: 0,
       onGround: false,
     };
-    const speed = { walk: 4.8, run: 7.5, jump: 6.5, gravity: 25, friction: 10 };
+    const speed = { walk: 6, run: 10, jump: 8, gravity: 16, friction: 8 };
     const bounds = { xz: 0.35, y: 0.9 };
-    const EYE_HEIGHT = 0.7; // центр -> глаза ~1.6 м
     const keys = {};
 
     const pointerLockElement = renderer.domElement;
@@ -483,8 +315,6 @@
       if (document.pointerLockElement === pointerLockElement) {
         log('Управление активировано. WASD/Space/Shift + мышь.');
       } else {
-        mouseLeftDown = false;
-        resetMining();
         log('Кликните по экрану для захвата мыши.');
       }
     });
@@ -499,9 +329,8 @@
 
     document.addEventListener('keydown', (e) => {
       keys[e.code] = true;
-      if (/Digit[1-9]/.test(e.code)) {
-        const idx = Number(e.code.slice(-1)) - 1;
-        if (idx < HOTBAR_SLOTS) setSelectedSlot(idx);
+      if (/Digit[1-5]/.test(e.code)) {
+        setBlockType(Number(e.code.slice(-1)) - 1);
       }
     });
     document.addEventListener('keyup', (e) => keys[e.code] = false);
@@ -509,78 +338,22 @@
     const raycaster = new THREE.Raycaster();
     raycaster.far = 6;
     const mouse = new THREE.Vector2(0, 0);
-    const breakTimes = { 0: 2, 1: 2, 4: 2, 2: 10, 3: 4, 5: 12 };
-
-    function computeHit() {
-      raycaster.setFromCamera(mouse, camera);
-      const hits = raycaster.intersectObjects([...meshes.values()], false);
-      return hits.length ? hits[0] : null;
-    }
-
-    function updateRaycast() {
-      currentHit = computeHit();
-    }
-
-    function resetMining() {
-      mining.target = null;
-      mining.progress = 0;
-      mining.required = 0;
-      mining.type = null;
-      progressEl.style.display = 'none';
-      progressBar.style.width = '0%';
-    }
-
-    function updateMining(dt) {
-      if (!mouseLeftDown || document.pointerLockElement !== pointerLockElement) {
-        resetMining();
-        return;
-      }
-      if (!currentHit) { resetMining(); return; }
-      const { x, y, z } = currentHit.object.userData.block;
-      const key = keyFor(x, y, z);
-      const type = getBlock(x, y, z);
-      if (type === undefined) { resetMining(); return; }
-      if (mining.target !== key) {
-        mining.target = key;
-        mining.progress = 0;
-        mining.type = type;
-        mining.required = breakTimes[type] ?? 2;
-      }
-      progressEl.style.display = 'block';
-      mining.progress += dt;
-      const pct = Math.min(1, mining.progress / mining.required);
-      progressBar.style.width = `${pct * 100}%`;
-      if (mining.progress >= mining.required) {
-        const removedType = removeBlock(x, y, z);
-        if (removedType !== null) {
-          spawnDrop(removedType, new THREE.Vector3(x, y, z));
-        }
-        resetMining();
-      }
-    }
 
     window.addEventListener('mousedown', (e) => {
       if (document.pointerLockElement !== pointerLockElement) return;
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObjects([...meshes.values()], false);
+      if (!hits.length) return;
+      const hit = hits[0];
+      const { x, y, z } = hit.object.userData.block;
       if (e.button === 0) {
-        mouseLeftDown = true;
+        removeBlock(x, y, z);
       } else if (e.button === 2) {
-        updateRaycast();
-        if (!currentHit) return;
-        const { x, y, z } = currentHit.object.userData.block;
-        const n = currentHit.face?.normal ?? new THREE.Vector3();
+        const n = hit.face?.normal ?? new THREE.Vector3();
         const nx = x + n.x;
         const ny = y + n.y;
         const nz = z + n.z;
-        const type = selectedBlockType();
-        if (type === null) { log('Нет блока в выбранном слоте.'); return; }
-        const placed = addBlock(nx, ny, nz, type);
-        if (placed) consumeSelectedBlock();
-      }
-    });
-    window.addEventListener('mouseup', (e) => {
-      if (e.button === 0) {
-        mouseLeftDown = false;
-        resetMining();
+        addBlock(nx, ny, nz, currentBlock);
       }
     });
     window.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -656,33 +429,6 @@
       moveAxis('z', player.velocity.z * dt);
     }
 
-    function updateDrops(dt) {
-      const removals = [];
-      drops.forEach((drop, idx) => {
-        drop.velocity.y -= speed.gravity * dt;
-        drop.mesh.position.addScaledVector(drop.velocity, dt);
-        const px = Math.floor(drop.mesh.position.x);
-        const py = Math.floor(drop.mesh.position.y - 0.3);
-        const pz = Math.floor(drop.mesh.position.z);
-        if (isSolid(px, py, pz)) {
-          drop.mesh.position.y = py + 1.05;
-          drop.velocity.y = 0;
-        }
-        const dist = drop.mesh.position.distanceTo(player.position);
-        if (dist <= 1.5) {
-          if (addToInventory(drop.type, 1)) {
-            scene.remove(drop.mesh);
-            removals.push(idx);
-          }
-        }
-        if (drop.mesh.position.y < -10) {
-          scene.remove(drop.mesh);
-          removals.push(idx);
-        }
-      });
-      removals.sort((a, b) => b - a).forEach(i => drops.splice(i, 1));
-    }
-
     function resizeRenderer() {
       const width = window.innerWidth;
       const height = window.innerHeight;
@@ -694,16 +440,7 @@
     resizeRenderer();
 
     function saveWorld() {
-      const data = {
-        world: [...world.entries()],
-        inventory: serializeInventory(),
-        selectedSlot,
-        player: {
-          pos: [player.position.x, player.position.y, player.position.z],
-          yaw: player.yaw,
-          pitch: player.pitch,
-        },
-      };
+      const data = [...world.entries()];
       localStorage.setItem('voxelWorld', JSON.stringify(data));
       log('Мир сохранён в localStorage.');
     }
@@ -712,7 +449,7 @@
       if (!data) { log('Нет сохранений.'); return; }
       clearWorld();
       const parsed = JSON.parse(data);
-      parsed.world?.forEach(([k, v]) => {
+      parsed.forEach(([k, v]) => {
         const [x, y, z] = k.split(',').map(Number);
         world.set(k, v);
         updateBlockMesh(x, y, z);
@@ -721,14 +458,8 @@
         const [x, y, z] = key.split(',').map(Number);
         refreshNeighbors(x, y, z);
       });
-      const p = parsed.player;
-      if (p?.pos) player.position.set(p.pos[0], p.pos[1], p.pos[2]);
+      player.position.set(0, 18, 0);
       player.velocity.set(0, 0, 0);
-      player.yaw = p?.yaw ?? 0;
-      player.pitch = p?.pitch ?? 0;
-      if (typeof parsed.selectedSlot === 'number') selectedSlot = parsed.selectedSlot;
-      deserializeInventory(parsed.inventory);
-      renderHotbar();
       log('Мир загружен.');
     }
     function clearWorld() {
@@ -738,8 +469,6 @@
       });
       meshes.clear();
       world.clear();
-      drops.forEach(d => scene.remove(d.mesh));
-      drops.length = 0;
     }
 
     document.getElementById('save').onclick = saveWorld;
@@ -750,11 +479,8 @@
       requestAnimationFrame(animate);
       const dt = Math.min(0.05, clock.getDelta() || 1 / 60);
       physics(dt);
-      camera.position.copy(player.position).add(new THREE.Vector3(0, EYE_HEIGHT, 0));
+      camera.position.copy(player.position);
       camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
-      updateRaycast();
-      updateMining(dt);
-      updateDrops(dt);
       renderer.render(scene, camera);
     }
 
