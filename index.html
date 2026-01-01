@@ -47,9 +47,14 @@
     button:hover { background: #359735; }
     button:active { transform: translateY(1px); }
     #hotbar {
+      position: fixed;
+      left: 50%;
+      bottom: 20px;
+      transform: translateX(-50%);
       display: flex;
       gap: 6px;
       align-items: center;
+      z-index: 12;
     }
     .slot {
       width: 42px;
@@ -255,6 +260,11 @@
     renderHotbar();
 
     const dropGeometry = new THREE.BoxGeometry(0.35, 0.35, 0.35);
+    const outlineGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+    const outlineMat = new THREE.LineBasicMaterial({ color: 0xffffff });
+    const outlineMesh = new THREE.LineSegments(outlineGeo, outlineMat);
+    outlineMesh.visible = false;
+    scene.add(outlineMesh);
     function findSlotWithType(type) {
       return inventory.findIndex(s => s.type === type && s.count > 0);
     }
@@ -398,12 +408,17 @@
 
     function spawnDrop(type, position) {
       const mesh = new THREE.Mesh(dropGeometry, materials[type]);
-      mesh.position.copy(position).add(new THREE.Vector3(0, 0.3, 0));
+      const jitter = 0.15;
+      mesh.position.copy(position).add(new THREE.Vector3(
+        (Math.random() * 2 - 1) * jitter,
+        0.6,
+        (Math.random() * 2 - 1) * jitter,
+      ));
       scene.add(mesh);
       drops.push({
         mesh,
         type,
-        velocity: new THREE.Vector3((Math.random() - 0.5) * 1.4, Math.random() * 2 + 1, (Math.random() - 0.5) * 1.4),
+        velocity: new THREE.Vector3((Math.random() * 0.4 - 0.2), 0.4, (Math.random() * 0.4 - 0.2)),
       });
     }
 
@@ -429,21 +444,77 @@
     }
     function fbm(x, z) {
       let total = 0;
-      let amp = 0.7;
-      let freq = 0.05;
-      for (let i = 0; i < 4; i++) {
+      let amp = 0.8;
+      let freq = 0.04;
+      for (let i = 0; i < 5; i++) {
         total += amp * valueNoise(x * freq, z * freq);
         freq *= 2;
-        amp *= 0.5;
+        amp *= 0.55;
       }
       return total;
     }
 
+    function blurHeight(heights, size) {
+      const out = new Array(size * size).fill(0);
+      for (let x = 0; x < size; x++) {
+        for (let z = 0; z < size; z++) {
+          let sum = 0;
+          let count = 0;
+          for (let dx = -1; dx <= 1; dx++) {
+            for (let dz = -1; dz <= 1; dz++) {
+              const nx = x + dx;
+              const nz = z + dz;
+              if (nx < 0 || nz < 0 || nx >= size || nz >= size) continue;
+              sum += heights[nx * size + nz];
+              count++;
+            }
+          }
+          out[x * size + z] = sum / count;
+        }
+      }
+      return out;
+    }
+
+    function clampSlope(heights, size, maxDelta = 2, iterations = 3) {
+      for (let it = 0; it < iterations; it++) {
+        let changed = false;
+        for (let x = 0; x < size; x++) {
+          for (let z = 0; z < size; z++) {
+            const idx = x * size + z;
+            const h = heights[idx];
+            for (const [dx, dz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+              const nx = x + dx, nz = z + dz;
+              if (nx < 0 || nz < 0 || nx >= size || nz >= size) continue;
+              const nIdx = nx * size + nz;
+              if (heights[nIdx] > h + maxDelta) {
+                heights[nIdx] = h + maxDelta;
+                changed = true;
+              }
+            }
+          }
+        }
+        if (!changed) break;
+      }
+    }
+
     function generateWorld() {
       const half = Math.floor(WORLD_SIZE / 2);
+      const size = half * 2 + 1;
+      let heights = new Array(size * size).fill(0);
       for (let x = -half; x <= half; x++) {
         for (let z = -half; z <= half; z++) {
-          const height = Math.floor(12 + fbm(x, z) * 8);
+          const h = 12 + fbm(x, z) * 8;
+          heights[(x + half) * size + (z + half)] = h;
+        }
+      }
+      for (let i = 0; i < 3; i++) heights = blurHeight(heights, size);
+      clampSlope(heights, size, 2, 4);
+      for (let i = 0; i < heights.length; i++) heights[i] = Math.round(heights[i]);
+
+      for (let x = -half; x <= half; x++) {
+        for (let z = -half; z <= half; z++) {
+          const idx = (x + half) * size + (z + half);
+          const height = heights[idx];
           const dirtDepth = 2 + Math.floor((hash2(x, z) * 100) % 3); // 2-4 слоёв
           for (let y = 0; y <= height; y++) {
             let type = 2; // stone
@@ -519,6 +590,13 @@
 
     function updateRaycast() {
       currentHit = computeHit();
+      if (currentHit) {
+        const { x, y, z } = currentHit.object.userData.block;
+        outlineMesh.position.set(x, y, z);
+        outlineMesh.visible = true;
+      } else {
+        outlineMesh.visible = false;
+      }
     }
 
     function resetMining() {
@@ -658,23 +736,40 @@
 
     function updateDrops(dt) {
       const removals = [];
+      const maxSpeed = 8;
+      const gravityDrop = 9.8;
       drops.forEach((drop, idx) => {
-        drop.velocity.y -= speed.gravity * dt;
+        drop.velocity.y -= gravityDrop * dt;
+        drop.velocity.x *= Math.max(0, 1 - 6 * dt);
+        drop.velocity.z *= Math.max(0, 1 - 6 * dt);
+        const speedLen = drop.velocity.length();
+        if (speedLen > maxSpeed) {
+          drop.velocity.multiplyScalar(maxSpeed / speedLen);
+        }
         drop.mesh.position.addScaledVector(drop.velocity, dt);
+
         const px = Math.floor(drop.mesh.position.x);
-        const py = Math.floor(drop.mesh.position.y - 0.3);
+        const py = Math.floor(drop.mesh.position.y - 0.4);
         const pz = Math.floor(drop.mesh.position.z);
         if (isSolid(px, py, pz)) {
-          drop.mesh.position.y = py + 1.05;
-          drop.velocity.y = 0;
+          drop.mesh.position.y = py + 1.0;
+          drop.velocity.y *= -0.2;
         }
+        if (drop.velocity.length() < 0.05) {
+          drop.velocity.set(0, 0, 0);
+        }
+
         const dist = drop.mesh.position.distanceTo(player.position);
         if (dist <= 1.5) {
-          if (addToInventory(drop.type, 1)) {
+          const lerpT = Math.min(0.5, dt * 5);
+          drop.mesh.position.lerp(player.position, lerpT);
+          if (dist <= 1.0 && addToInventory(drop.type, 1)) {
             scene.remove(drop.mesh);
             removals.push(idx);
+            return;
           }
         }
+
         if (drop.mesh.position.y < -10) {
           scene.remove(drop.mesh);
           removals.push(idx);
