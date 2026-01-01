@@ -16,7 +16,7 @@
       color: #f1f1f1;
     }
     #overlay {
-      position: absolute;
+      position: fixed;
       top: 10px;
       left: 10px;
       z-index: 10;
@@ -28,6 +28,7 @@
       border-radius: 8px;
       box-shadow: 0 4px 16px rgba(0,0,0,0.4);
       backdrop-filter: blur(2px);
+      width: fit-content;
     }
     #buttons {
       display: flex;
@@ -49,12 +50,17 @@
     #hotbar {
       position: fixed;
       left: 50%;
-      bottom: 20px;
+      bottom: 18px;
       transform: translateX(-50%);
-      display: flex;
-      gap: 6px;
+      display: inline-flex;
+      gap: 8px;
       align-items: center;
-      z-index: 12;
+      z-index: 9999;
+      width: fit-content;
+      padding: 6px 8px;
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: 10px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
     }
     .slot {
       width: 42px;
@@ -163,12 +169,12 @@
       <button id="save">Save</button>
       <button id="load">Load</button>
     </div>
-    <div id="hotbar"></div>
     <div id="hint">
       ЛКМ — сломать, ПКМ — поставить блок.<br>
       Клик по экрану включает захват мыши.
     </div>
   </div>
+  <div id="hotbar"></div>
   <div id="crosshair"></div>
   <div id="progress"><div class="bar"></div></div>
   <div id="log">Готово</div>
@@ -556,7 +562,7 @@
       } else {
         mouseLeftDown = false;
         resetMining();
-        log('Кликните по экрану для захвата мыши.');
+        log('Кликните по экрану для захват мыши.');
       }
     });
 
