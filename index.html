@@ -47,6 +47,48 @@
     }
     button:hover { background: #359735; }
     button:active { transform: translateY(1px); }
+    #heartsHUD {
+      position: fixed;
+      left: 18px;
+      bottom: 22px;
+      display: flex;
+      gap: 4px;
+      z-index: 9999;
+      pointer-events: none;
+    }
+    #heartsHUD svg {
+      width: 22px;
+      height: 22px;
+      filter: drop-shadow(0 1px 1px rgba(0,0,0,0.35));
+    }
+    #youDied {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font-size: 36px;
+      font-weight: 800;
+      z-index: 10000;
+      flex-direction: column;
+      gap: 16px;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+    }
+    #youDied button {
+      background: #cc3333;
+      border: none;
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 16px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    #youDied button:hover { background: #e24444; }
+    #youDied button:active { transform: translateY(1px); }
     #hotbar {
       position: fixed;
       left: 50%;
@@ -206,6 +248,11 @@
   </div>
   <div id="hotbar"></div>
   <div id="crosshair"></div>
+  <div id="heartsHUD"></div>
+  <div id="youDied">
+    <div>You died</div>
+    <button id="respawnBtn">Respawn</button>
+  </div>
   <div id="progress"><div class="bar"></div></div>
   <div id="log">Готово</div>
   <canvas id="c"></canvas>
@@ -295,6 +342,54 @@
     }
     renderHotbar();
 
+    function heartSVG(fillLeft, fillRight) {
+      const left = fillLeft ? '#e44' : '#3a3a3a';
+      const right = fillRight ? '#e44' : '#3a3a3a';
+      return `
+        <svg viewBox="0 0 32 32">
+          <path d="M16 29s-6.5-4.5-10-9.5C3 17 2 14.5 2 12a7 7 0 0 1 7-7c3 0 5 2 7 5 2-3 4-5 7-5a7 7 0 0 1 7 7c0 2.5-1 5-4 7.5C22.5 24.5 16 29 16 29z" fill="#2a2a2a" stroke="#444" stroke-width="2"/>
+          <path d="M16 28s-6-4.2-9.3-8.8C4.2 17.1 3.3 15 3.3 12.8A6.2 6.2 0 0 1 9.5 6.5c2.5 0 4.2 1.8 6.5 4.9V28z" fill="${left}"/>
+          <path d="M16 28s6-4.2 9.3-8.8c2.5-2.1 3.4-4.2 3.4-6.4A6.2 6.2 0 0 0 22.5 6.5c-2.5 0-4.2 1.8-6.5 4.9V28z" fill="${right}"/>
+        </svg>
+      `;
+    }
+
+    const logEl = document.getElementById('log');
+    const log = (msg) => logEl.textContent = msg;
+    const progressEl = document.getElementById('progress');
+    const progressBar = progressEl.querySelector('.bar');
+    let mouseLeftDown = false;
+    let currentHit = null;
+    const mining = { target: null, progress: 0, required: 0, type: null };
+    const health = { max: 20, hp: 20 };
+    let fallStartY = null;
+    let heartFlashTimeout = null;
+    const heartsHUD = document.getElementById('heartsHUD');
+    const diedOverlay = document.getElementById('youDied');
+    const respawnBtn = document.getElementById('respawnBtn');
+
+    function renderHearts(hp) {
+      heartsHUD.innerHTML = '';
+      for (let i = 0; i < 10; i++) {
+        const heartHP = Math.min(2, Math.max(0, hp - i * 2));
+        const fillLeft = heartHP >= 1;
+        const fillRight = heartHP >= 2;
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = heartSVG(fillLeft, fillRight);
+        heartsHUD.appendChild(wrapper.firstElementChild);
+      }
+      if (heartFlashTimeout) {
+        heartsHUD.style.transform = 'scale(1)';
+        heartsHUD.style.filter = 'drop-shadow(0 0 6px rgba(255,80,80,0.5))';
+        clearTimeout(heartFlashTimeout);
+      }
+      heartFlashTimeout = setTimeout(() => {
+        heartsHUD.style.transform = '';
+        heartsHUD.style.filter = '';
+      }, 150);
+    }
+    renderHearts(health.hp);
+
     const dropGeometry = new THREE.BoxGeometry(0.35, 0.35, 0.35);
     const outlineGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
     const outlineMat = new THREE.LineBasicMaterial({ color: 0xffffff });
@@ -346,102 +441,6 @@
       renderHotbar();
     }
 
-    const logEl = document.getElementById('log');
-    const log = (msg) => logEl.textContent = msg;
-    const progressEl = document.getElementById('progress');
-    const progressBar = progressEl.querySelector('.bar');
-    let mouseLeftDown = false;
-    let currentHit = null;
-    const mining = { target: null, progress: 0, required: 0, type: null };
-
-    function keyFor(x, y, z) { return `${x},${y},${z}`; }
-    function getBlock(x, y, z) { return world.get(keyFor(x, y, z)); }
-    function isSolid(x, y, z) { return world.has(keyFor(x, y, z)); }
-
-    const faceDefs = [
-      { dir: [1, 0, 0],  corners: [[0.5, -0.5, -0.5],[0.5, 0.5, -0.5],[0.5, 0.5, 0.5],[0.5, -0.5, 0.5]] },
-      { dir: [-1, 0, 0], corners: [[-0.5, -0.5, 0.5],[-0.5, 0.5, 0.5],[-0.5, 0.5, -0.5],[-0.5, -0.5, -0.5]] },
-      { dir: [0, 1, 0],  corners: [[-0.5, 0.5, 0.5],[0.5, 0.5, 0.5],[0.5, 0.5, -0.5],[-0.5, 0.5, -0.5]] },
-      { dir: [0, -1, 0], corners: [[-0.5, -0.5, -0.5],[0.5, -0.5, -0.5],[0.5, -0.5, 0.5],[-0.5, -0.5, 0.5]] },
-      { dir: [0, 0, 1],  corners: [[0.5, -0.5, 0.5],[0.5, 0.5, 0.5],[-0.5, 0.5, 0.5],[-0.5, -0.5, 0.5]] },
-      { dir: [0, 0, -1], corners: [[-0.5, -0.5, -0.5],[-0.5, 0.5, -0.5],[0.5, 0.5, -0.5],[0.5, -0.5, -0.5]] },
-    ];
-
-    function buildGeometryForBlock(x, y, z) {
-      const positions = [];
-      const normals = [];
-      const indices = [];
-      let faceCount = 0;
-      faceDefs.forEach(({ dir, corners }) => {
-        const nx = x + dir[0];
-        const ny = y + dir[1];
-        const nz = z + dir[2];
-        if (isSolid(nx, ny, nz)) return;
-        const baseIndex = positions.length / 3;
-        corners.forEach(c => positions.push(c[0] + x, c[1] + y, c[2] + z));
-        for (let i = 0; i < 4; i++) normals.push(...dir);
-        indices.push(baseIndex, baseIndex + 1, baseIndex + 2, baseIndex, baseIndex + 2, baseIndex + 3);
-        faceCount++;
-      });
-      if (!positions.length) return null;
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-      geo.setIndex(indices);
-      geo.computeBoundingSphere();
-      return geo;
-    }
-
-    function removeBlockMesh(x, y, z) {
-      const k = keyFor(x, y, z);
-      const mesh = meshes.get(k);
-      if (mesh) {
-        scene.remove(mesh);
-        mesh.geometry.dispose();
-        meshes.delete(k);
-      }
-    }
-
-    function updateBlockMesh(x, y, z) {
-      removeBlockMesh(x, y, z);
-      if (!isSolid(x, y, z)) return;
-      const geo = buildGeometryForBlock(x, y, z);
-      if (!geo) return;
-      const type = getBlock(x, y, z);
-      const mesh = new THREE.Mesh(geo, materials[type]);
-      mesh.userData.block = { x, y, z };
-      mesh.castShadow = false;
-      mesh.receiveShadow = false;
-      scene.add(mesh);
-      meshes.set(keyFor(x, y, z), mesh);
-    }
-
-    function refreshNeighbors(x, y, z) {
-      for (const [dx, dy, dz] of [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) {
-        updateBlockMesh(x + dx, y + dy, z + dz);
-      }
-    }
-
-    function addBlock(x, y, z, type) {
-      if (y < 0 || y >= WORLD_HEIGHT) return false;
-      const k = keyFor(x, y, z);
-      if (world.has(k)) return false;
-      world.set(k, type);
-      updateBlockMesh(x, y, z);
-      refreshNeighbors(x, y, z);
-      return true;
-    }
-
-    function removeBlock(x, y, z) {
-      const k = keyFor(x, y, z);
-      if (!world.has(k)) return null;
-      const type = world.get(k);
-      world.delete(k);
-      removeBlockMesh(x, y, z);
-      refreshNeighbors(x, y, z);
-      return type;
-    }
-
     function blockIntersectsPlayer(x, y, z) {
       const blockMin = new THREE.Vector3(x - 0.5, y - 0.5, z - 0.5);
       const blockMax = new THREE.Vector3(x + 0.5, y + 0.5, z + 0.5);
@@ -476,6 +475,23 @@
         velocity: new THREE.Vector3((Math.random() * 0.4 - 0.2), 0.4, (Math.random() * 0.4 - 0.2)),
       });
     }
+
+    function takeDamage(amount) {
+      health.hp = Math.max(0, health.hp - amount);
+      renderHearts(health.hp);
+      if (health.hp === 0) {
+        diedOverlay.style.display = 'flex';
+      }
+    }
+
+    function respawn() {
+      health.hp = health.max;
+      renderHearts(health.hp);
+      diedOverlay.style.display = 'none';
+      player.position.set(0, 24, 0);
+      player.velocity.set(0, 0, 0);
+    }
+    respawnBtn.onclick = respawn;
 
     function hash2(x, z) {
       const s = Math.sin(x * 374761393 + z * 668265263) * 43758.5453;
@@ -595,7 +611,7 @@
       pitch: 0,
       onGround: false,
     };
-    const speed = { walk: 8.0, run: 11.5, jump: 8.0, gravity: 22, friction: 10 };
+    const speed = { walk: 6.5, run: 9.5, jump: 8.0, gravity: 22, friction: 8, max: 12.5 };
     const bounds = { xz: 0.35, y: 0.9 };
     const EYE_HEIGHT = 0.7; // центр -> глаза ~1.6 м
     const keys = {};
@@ -730,17 +746,22 @@
       forward.normalize();
       right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
 
-      const accel = new THREE.Vector3();
+      const input = new THREE.Vector3();
       const run = keys['ShiftLeft'] || keys['ShiftRight'];
       const currentSpeed = run ? speed.run : speed.walk;
-      if (keys['KeyW']) accel.add(forward);
-      if (keys['KeyS']) accel.sub(forward);
-      if (keys['KeyA']) accel.sub(right);
-      if (keys['KeyD']) accel.add(right);
-      const airFactor = player.onGround ? 1 : 0.6;
-      accel.normalize().multiplyScalar(currentSpeed * airFactor);
-      player.velocity.x += accel.x * dt;
-      player.velocity.z += accel.z * dt;
+      if (keys['KeyW']) input.add(forward);
+      if (keys['KeyS']) input.sub(forward);
+      if (keys['KeyA']) input.sub(right);
+      if (keys['KeyD']) input.add(right);
+      const airFactor = player.onGround ? 1 : 0.7;
+      if (input.lengthSq() > 0) {
+        input.normalize().multiplyScalar(currentSpeed * airFactor);
+        player.velocity.x = input.x;
+        player.velocity.z = input.z;
+      } else {
+        player.velocity.x *= Math.max(0, 1 - speed.friction * dt);
+        player.velocity.z *= Math.max(0, 1 - speed.friction * dt);
+      }
 
       player.velocity.y -= speed.gravity * dt;
       if (player.onGround && keys['Space']) {
@@ -753,7 +774,7 @@
     }
 
     function applyFriction(dt) {
-      const friction = Math.max(0, 1 - speed.friction * dt);
+      const friction = Math.max(0, 1 - speed.friction * dt * 0.35);
       player.velocity.x *= friction;
       player.velocity.z *= friction;
     }
@@ -792,6 +813,19 @@
       moveAxis('y', player.velocity.y * dt);
       moveAxis('x', player.velocity.x * dt);
       moveAxis('z', player.velocity.z * dt);
+
+      if (player.onGround) {
+        if (fallStartY !== null) {
+          const fallDistance = fallStartY - player.position.y;
+          if (fallDistance > 3) {
+            const damage = Math.floor(fallDistance - 3);
+            if (damage > 0) takeDamage(damage);
+          }
+          fallStartY = null;
+        }
+      } else {
+        if (fallStartY === null) fallStartY = player.position.y;
+      }
     }
 
     function updateDrops(dt) {
@@ -922,3 +956,4 @@
   </script>
 </body>
 </html>
+
