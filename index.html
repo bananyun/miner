@@ -442,6 +442,25 @@
       return type;
     }
 
+    function blockIntersectsPlayer(x, y, z) {
+      const blockMin = new THREE.Vector3(x - 0.5, y - 0.5, z - 0.5);
+      const blockMax = new THREE.Vector3(x + 0.5, y + 0.5, z + 0.5);
+      const playerMin = new THREE.Vector3(
+        player.position.x - bounds.xz,
+        player.position.y - bounds.y,
+        player.position.z - bounds.xz
+      );
+      const playerMax = new THREE.Vector3(
+        player.position.x + bounds.xz,
+        player.position.y + bounds.y,
+        player.position.z + bounds.xz
+      );
+      if (playerMax.x <= blockMin.x || playerMin.x >= blockMax.x) return false;
+      if (playerMax.y <= blockMin.y || playerMin.y >= blockMax.y) return false;
+      if (playerMax.z <= blockMin.z || playerMin.z >= blockMax.z) return false;
+      return true;
+    }
+
     function spawnDrop(type, position) {
       const mesh = new THREE.Mesh(dropGeometry, materials[type]);
       const jitter = 0.15;
@@ -576,7 +595,7 @@
       pitch: 0,
       onGround: false,
     };
-    const speed = { walk: 4.8, run: 7.5, jump: 6.5, gravity: 25, friction: 10 };
+    const speed = { walk: 6.5, run: 9.0, jump: 7.8, gravity: 22, friction: 10 };
     const bounds = { xz: 0.35, y: 0.9 };
     const EYE_HEIGHT = 0.7; // центр -> глаза ~1.6 м
     const keys = {};
@@ -687,6 +706,10 @@
         const nz = z + n.z;
         const type = selectedBlockType();
         if (type === null) { log('Нет блока в выбранном слоте.'); return; }
+        if (blockIntersectsPlayer(nx, ny, nz)) {
+          log('Нельзя поставить блок здесь.');
+          return;
+        }
         const placed = addBlock(nx, ny, nz, type);
         if (placed) consumeSelectedBlock();
       }
@@ -714,7 +737,8 @@
       if (keys['KeyS']) accel.sub(forward);
       if (keys['KeyA']) accel.sub(right);
       if (keys['KeyD']) accel.add(right);
-      accel.normalize().multiplyScalar(currentSpeed);
+      const airFactor = player.onGround ? 1 : 0.6;
+      accel.normalize().multiplyScalar(currentSpeed * airFactor);
       player.velocity.x += accel.x * dt;
       player.velocity.z += accel.z * dt;
 
@@ -898,3 +922,4 @@
   </script>
 </body>
 </html>
+
